@@ -504,6 +504,10 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     dashboard_css = response(get(build_conn(), "/dashboard.css"), 200)
     assert dashboard_css =~ ":root {"
+    assert dashboard_css =~ "@media (prefers-color-scheme: dark)"
+    assert dashboard_css =~ "color-scheme: dark"
+    assert dashboard_css =~ "--page-gradient-end"
+    assert dashboard_css =~ "--code-bg"
     assert dashboard_css =~ ".status-badge-live"
     assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-live"
     assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-offline"
