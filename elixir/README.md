@@ -61,8 +61,18 @@ cd symphony/elixir
 mise trust
 mise install
 mise exec -- mix setup
-mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- mix escript.build
+mise exec -- escript ./bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails ./WORKFLOW.md
+```
+
+`mix escript.build` creates `./bin/symphony`. `mise exec --` runs commands with the Erlang and
+Elixir versions pinned in `mise.toml`. `escript ./bin/symphony` explicitly runs the generated
+escript, which is especially useful on Windows.
+
+To start Symphony with the interactive top-level orchestrator chat, pass a business plan file:
+
+```bash
+mise exec -- escript ./bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails --orchestrator ../business-plan.md ./WORKFLOW.md
 ```
 
 ## Configuration
@@ -79,6 +89,8 @@ Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
+- `--orchestrator <business-plan-path>` starts an interactive Codex orchestrator chat after
+  Symphony boots.
 
 The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
 Codex session prompt.
@@ -170,7 +182,20 @@ The observability UI now runs on a minimal Phoenix stack:
 ## Testing
 
 ```bash
-make all
+mise exec -- mix test
+```
+
+To run only the tests that cover the CLI, orchestrator tools, issue creation, and worker interrupt
+path:
+
+```bash
+mise exec -- mix test test/symphony_elixir/cli_test.exs test/symphony_elixir/dynamic_tool_test.exs test/symphony_elixir/extensions_test.exs test/symphony_elixir/orchestrator_interrupt_test.exs
+```
+
+For the full local check suite:
+
+```bash
+MIX="mise exec -- mix" make all
 ```
 
 Run the real external end-to-end test only when you want Symphony to create disposable Linear
