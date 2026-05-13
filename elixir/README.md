@@ -67,7 +67,9 @@ mise exec -- escript ./bin/symphony --i-understand-that-this-will-be-running-wit
 
 `mix escript.build` creates `./bin/symphony`. `mise exec --` runs commands with the Erlang and
 Elixir versions pinned in `mise.toml`. `escript ./bin/symphony` explicitly runs the generated
-escript, which is especially useful on Windows.
+escript, which is especially useful on Windows. The long guardrails acknowledgement flag is required
+only once per OS user; after a successful acknowledged run, Symphony writes a marker under your home
+directory and future runs can omit the flag.
 
 To start Symphony with the interactive top-level orchestrator chat, pass a business plan file:
 

@@ -16,6 +16,8 @@ defmodule SymphonyElixir.CLI do
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
           set_orchestrator_business_plan_path: (String.t() -> :ok | {:error, term()}),
           start_orchestrator_agent: (String.t() -> {:ok, pid()} | {:error, term()}),
+          guardrails_acknowledged?: (-> boolean()),
+          persist_guardrails_acknowledgement: (-> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result())
         }
 
@@ -35,14 +37,14 @@ defmodule SymphonyElixir.CLI do
   def evaluate(args, deps \\ runtime_deps()) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
+        with :ok <- require_guardrails_acknowledgement(opts, deps),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
           run(Path.expand("WORKFLOW.md"), opts, deps)
         end
 
       {opts, [workflow_path], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
+        with :ok <- require_guardrails_acknowledgement(opts, deps),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_port(opts, deps) do
           run(workflow_path, opts, deps)
@@ -89,6 +91,8 @@ defmodule SymphonyElixir.CLI do
       set_server_port_override: &set_server_port_override/1,
       set_orchestrator_business_plan_path: &set_orchestrator_business_plan_path/1,
       start_orchestrator_agent: &SymphonyElixir.OrchestratorAgent.start_async/1,
+      guardrails_acknowledged?: &guardrails_acknowledged?/0,
+      persist_guardrails_acknowledgement: &persist_guardrails_acknowledgement/0,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
   end
@@ -109,11 +113,22 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  defp require_guardrails_acknowledgement(opts) do
-    if Keyword.get(opts, @acknowledgement_switch, false) do
-      :ok
-    else
-      {:error, acknowledgement_banner()}
+  defp require_guardrails_acknowledgement(opts, deps) do
+    acknowledged? = Map.get(deps, :guardrails_acknowledged?, fn -> false end)
+    persist_acknowledgement = Map.get(deps, :persist_guardrails_acknowledgement, fn -> :ok end)
+
+    cond do
+      Keyword.get(opts, @acknowledgement_switch, false) ->
+        case persist_acknowledgement.() do
+          :ok -> :ok
+          {:error, reason} -> {:error, "Failed to persist Symphony guardrails acknowledgement: #{inspect(reason)}"}
+        end
+
+      acknowledged?.() ->
+        :ok
+
+      true ->
+        {:error, acknowledgement_banner()}
     end
   end
 
@@ -123,7 +138,7 @@ defmodule SymphonyElixir.CLI do
       "This Symphony implementation is a low key engineering preview.",
       "Codex will run without any guardrails.",
       "SymphonyElixir is not a supported product and is presented as-is.",
-      "To proceed, start with `--i-understand-that-this-will-be-running-without-the-usual-guardrails` CLI argument"
+      "To proceed, start once with `--i-understand-that-this-will-be-running-without-the-usual-guardrails` CLI argument"
     ]
 
     width = Enum.max(Enum.map(lines, &String.length/1))
@@ -153,6 +168,24 @@ defmodule SymphonyElixir.CLI do
   defp set_logs_root(logs_root) do
     Application.put_env(:symphony_elixir, :log_file, LogFile.default_log_file(logs_root))
     :ok
+  end
+
+  defp guardrails_acknowledged? do
+    File.regular?(guardrails_acknowledgement_path())
+  end
+
+  defp persist_guardrails_acknowledgement do
+    path = guardrails_acknowledgement_path()
+    payload = "Symphony guardrails acknowledged at #{DateTime.utc_now() |> DateTime.to_iso8601()}\n"
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(path, payload) do
+      :ok
+    end
+  end
+
+  defp guardrails_acknowledgement_path do
+    Path.join([System.user_home!(), ".symphony", "guardrails_acknowledged"])
   end
 
   defp maybe_set_server_port(opts, deps) do

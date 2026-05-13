@@ -43,6 +43,95 @@ defmodule SymphonyElixir.CLITest do
     refute_received :started
   end
 
+  test "allows startup without the guardrails flag after acknowledgement was persisted" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path ->
+        send(parent, :file_checked)
+        true
+      end,
+      set_workflow_file_path: fn _path ->
+        send(parent, :workflow_set)
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      guardrails_acknowledged?: fn ->
+        send(parent, :ack_checked)
+        true
+      end,
+      persist_guardrails_acknowledgement: fn ->
+        send(parent, :ack_persisted)
+        :ok
+      end,
+      ensure_all_started: fn ->
+        send(parent, :started)
+        {:ok, [:symphony_elixir]}
+      end
+    }
+
+    assert :ok = CLI.evaluate(["WORKFLOW.md"], deps)
+    assert_received :ack_checked
+    assert_received :file_checked
+    assert_received :workflow_set
+    assert_received :started
+    refute_received :ack_persisted
+  end
+
+  test "persists acknowledgement when the guardrails flag is provided" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path -> true end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      guardrails_acknowledged?: fn ->
+        send(parent, :ack_checked)
+        false
+      end,
+      persist_guardrails_acknowledgement: fn ->
+        send(parent, :ack_persisted)
+        :ok
+      end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert :ok = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
+    assert_received :ack_persisted
+    refute_received :ack_checked
+  end
+
+  test "returns an error and does not start when acknowledgement persistence fails" do
+    parent = self()
+
+    deps = %{
+      file_regular?: fn _path ->
+        send(parent, :file_checked)
+        true
+      end,
+      set_workflow_file_path: fn _path ->
+        send(parent, :workflow_set)
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      persist_guardrails_acknowledgement: fn -> {:error, :eacces} end,
+      ensure_all_started: fn ->
+        send(parent, :started)
+        {:ok, [:symphony_elixir]}
+      end
+    }
+
+    assert {:error, message} = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
+    assert message =~ "Failed to persist Symphony guardrails acknowledgement"
+    assert message =~ ":eacces"
+    refute_received :file_checked
+    refute_received :workflow_set
+    refute_received :started
+  end
+
   test "defaults to WORKFLOW.md when workflow path is missing" do
     deps = %{
       file_regular?: fn path -> Path.basename(path) == "WORKFLOW.md" end,
