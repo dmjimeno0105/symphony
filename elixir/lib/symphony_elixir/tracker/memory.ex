@@ -35,6 +35,35 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
+  @spec create_issue(map()) :: {:ok, Issue.t()} | {:error, term()}
+  def create_issue(attrs) when is_map(attrs) do
+    title = Map.get(attrs, :title) || Map.get(attrs, "title")
+    description = Map.get(attrs, :description) || Map.get(attrs, "description")
+    priority = Map.get(attrs, :priority) || Map.get(attrs, "priority")
+    state = Map.get(attrs, :state) || Map.get(attrs, "state") || default_active_state()
+
+    cond do
+      not is_binary(title) or String.trim(title) == "" ->
+        {:error, :missing_title}
+
+      true ->
+        issue = %Issue{
+          id: "memory-#{System.unique_integer([:positive])}",
+          identifier: "MEM-#{System.unique_integer([:positive])}",
+          title: String.trim(title),
+          description: description,
+          priority: priority,
+          state: state,
+          created_at: DateTime.utc_now(),
+          updated_at: DateTime.utc_now()
+        }
+
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, configured_issues() ++ [issue])
+        send_event({:memory_tracker_issue_created, issue})
+        {:ok, issue}
+    end
+  end
+
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) do
     send_event({:memory_tracker_comment, issue_id, body})
@@ -59,6 +88,13 @@ defmodule SymphonyElixir.Tracker.Memory do
     case Application.get_env(:symphony_elixir, :memory_tracker_recipient) do
       pid when is_pid(pid) -> send(pid, message)
       _ -> :ok
+    end
+  end
+
+  defp default_active_state do
+    case SymphonyElixir.Config.settings!().tracker.active_states do
+      [state | _] when is_binary(state) -> state
+      _ -> "Todo"
     end
   end
 

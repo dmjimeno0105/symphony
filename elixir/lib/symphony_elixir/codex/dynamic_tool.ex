@@ -3,6 +3,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
+  alias SymphonyElixir.{Orchestrator, Tracker}
   alias SymphonyElixir.Linear.Client
 
   @linear_graphql_tool "linear_graphql"
@@ -26,31 +27,93 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   }
 
+  @orchestrator_tools %{
+    "symphony_status" => %{
+      "description" => "Return current Symphony polling, running worker, retry, token, and rate-limit status.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    "symphony_refresh" => %{
+      "description" => "Ask Symphony to poll and reconcile tracker state now.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    },
+    "symphony_create_issue" => %{
+      "description" => "Create a Linear issue for approved next work in Symphony's configured project and active state.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["title", "description"],
+        "properties" => %{
+          "title" => %{"type" => "string"},
+          "description" => %{"type" => "string"},
+          "priority" => %{"type" => ["integer", "null"]},
+          "state" => %{"type" => ["string", "null"]}
+        }
+      }
+    },
+    "symphony_interrupt_worker" => %{
+      "description" => "Stop a running worker by issue id or identifier and restart it immediately with amended guidance.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["issue_ref", "guidance"],
+        "properties" => %{
+          "issue_ref" => %{"type" => "string"},
+          "guidance" => %{"type" => "string"}
+        }
+      }
+    },
+    "symphony_read_business_plan" => %{
+      "description" => "Read the business plan file configured for this orchestrator session.",
+      "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
+    }
+  }
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     case tool do
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
 
+      "symphony_status" ->
+        execute_symphony_status()
+
+      "symphony_refresh" ->
+        execute_symphony_refresh()
+
+      "symphony_create_issue" ->
+        execute_symphony_create_issue(arguments)
+
+      "symphony_interrupt_worker" ->
+        execute_symphony_interrupt_worker(arguments)
+
+      "symphony_read_business_plan" ->
+        execute_symphony_read_business_plan(opts)
+
       other ->
         failure_response(%{
           "error" => %{
             "message" => "Unsupported dynamic tool: #{inspect(other)}.",
-            "supportedTools" => supported_tool_names()
+            "supportedTools" => supported_tool_names(opts)
           }
         })
     end
   end
 
   @spec tool_specs() :: [map()]
-  def tool_specs do
-    [
+  def tool_specs(opts \\ []) do
+    base = [
       %{
         "name" => @linear_graphql_tool,
         "description" => @linear_graphql_description,
         "inputSchema" => @linear_graphql_input_schema
       }
     ]
+
+    if Keyword.get(opts, :mode) == :orchestrator do
+      base ++ orchestrator_tool_specs()
+    else
+      base
+    end
   end
 
   defp execute_linear_graphql(arguments, opts) do
@@ -62,6 +125,53 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     else
       {:error, reason} ->
         failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_symphony_status do
+    case Orchestrator.snapshot() do
+      :timeout -> failure_response(%{"error" => %{"message" => "Symphony status timed out."}})
+      :unavailable -> failure_response(%{"error" => %{"message" => "Symphony orchestrator is unavailable."}})
+      snapshot -> dynamic_tool_response(true, encode_payload(snapshot))
+    end
+  end
+
+  defp execute_symphony_refresh do
+    case Orchestrator.request_refresh() do
+      :unavailable -> failure_response(%{"error" => %{"message" => "Symphony orchestrator is unavailable."}})
+      response -> dynamic_tool_response(true, encode_payload(response))
+    end
+  end
+
+  defp execute_symphony_create_issue(arguments) do
+    with {:ok, attrs} <- normalize_create_issue_arguments(arguments),
+         {:ok, issue} <- Tracker.create_issue(attrs) do
+      dynamic_tool_response(true, encode_payload(%{issue: serializable_value(issue)}))
+    else
+      {:error, reason} -> failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_symphony_interrupt_worker(arguments) do
+    with {:ok, issue_ref, guidance} <- normalize_interrupt_arguments(arguments),
+         {:ok, response} <- Orchestrator.interrupt_issue(issue_ref, guidance) do
+      dynamic_tool_response(true, encode_payload(response))
+    else
+      {:error, reason} -> failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_symphony_read_business_plan(opts) do
+    path =
+      Keyword.get(opts, :business_plan_path) ||
+        Application.get_env(:symphony_elixir, :orchestrator_business_plan_path)
+
+    with path when is_binary(path) <- path,
+         {:ok, content} <- File.read(path) do
+      dynamic_tool_response(true, encode_payload(%{path: path, content: content}))
+    else
+      nil -> failure_response(%{"error" => %{"message" => "No business plan path is configured."}})
+      {:error, reason} -> failure_response(%{"error" => %{"message" => "Failed to read business plan.", "reason" => inspect(reason)}})
     end
   end
 
@@ -89,6 +199,34 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp normalize_linear_graphql_arguments(_arguments), do: {:error, :invalid_arguments}
+
+  defp normalize_create_issue_arguments(arguments) when is_map(arguments) do
+    title = Map.get(arguments, "title") || Map.get(arguments, :title)
+    description = Map.get(arguments, "description") || Map.get(arguments, :description)
+    priority = Map.get(arguments, "priority") || Map.get(arguments, :priority)
+    state = Map.get(arguments, "state") || Map.get(arguments, :state)
+
+    cond do
+      not is_binary(title) or String.trim(title) == "" -> {:error, :missing_title}
+      not is_binary(description) -> {:error, :invalid_description}
+      true -> {:ok, %{title: title, description: description, priority: priority, state: state}}
+    end
+  end
+
+  defp normalize_create_issue_arguments(_arguments), do: {:error, :invalid_arguments}
+
+  defp normalize_interrupt_arguments(arguments) when is_map(arguments) do
+    issue_ref = Map.get(arguments, "issue_ref") || Map.get(arguments, :issue_ref)
+    guidance = Map.get(arguments, "guidance") || Map.get(arguments, :guidance)
+
+    cond do
+      not is_binary(issue_ref) or String.trim(issue_ref) == "" -> {:error, :missing_issue_ref}
+      not is_binary(guidance) or String.trim(guidance) == "" -> {:error, :missing_guidance}
+      true -> {:ok, String.trim(issue_ref), String.trim(guidance)}
+    end
+  end
+
+  defp normalize_interrupt_arguments(_arguments), do: {:error, :invalid_arguments}
 
   defp normalize_query(arguments) do
     case Map.get(arguments, "query") || Map.get(arguments, :query) do
@@ -143,6 +281,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp encode_payload(payload), do: inspect(payload)
+
+  defp serializable_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp serializable_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp serializable_value(%Time{} = value), do: Time.to_iso8601(value)
+  defp serializable_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp serializable_value(%_{} = struct), do: struct |> Map.from_struct() |> serializable_value()
+
+  defp serializable_value(value) when is_map(value) do
+    Map.new(value, fn {key, nested} -> {key, serializable_value(nested)} end)
+  end
+
+  defp serializable_value(value) when is_list(value), do: Enum.map(value, &serializable_value/1)
+  defp serializable_value(value), do: value
 
   defp tool_error_payload(:missing_query) do
     %{
@@ -203,7 +354,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
-  defp supported_tool_names do
-    Enum.map(tool_specs(), & &1["name"])
+  defp orchestrator_tool_specs do
+    Enum.map(@orchestrator_tools, fn {name, spec} -> Map.put(spec, "name", name) end)
+  end
+
+  defp supported_tool_names(opts) do
+    Enum.map(tool_specs(opts), & &1["name"])
   end
 end

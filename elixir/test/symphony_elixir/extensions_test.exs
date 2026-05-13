@@ -317,6 +317,63 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "project" => %{
+               "id" => "project-1",
+               "team" => %{
+                 "id" => "team-1",
+                 "states" => %{"nodes" => [%{"id" => "state-1"}]}
+               }
+             }
+           }
+         }},
+        {:ok,
+         %{
+           "data" => %{
+             "issueCreate" => %{
+               "success" => true,
+               "issue" => %{
+                 "id" => "issue-created",
+                 "identifier" => "MT-404",
+                 "title" => "Created issue",
+                 "description" => "Created from orchestrator",
+                 "priority" => 2,
+                 "state" => %{"name" => "Todo"},
+                 "branchName" => "dmj/created",
+                 "url" => "https://linear.app/acme/issue/MT-404",
+                 "labels" => %{"nodes" => []},
+                 "createdAt" => "2026-05-12T00:00:00Z",
+                 "updatedAt" => "2026-05-12T00:00:00Z"
+               }
+             }
+           }
+         }}
+      ]
+    )
+
+    assert {:ok, created_issue} =
+             Adapter.create_issue(%{
+               title: "Created issue",
+               description: "Created from orchestrator",
+               priority: 2,
+               state: "Todo"
+             })
+
+    assert_receive {:graphql_called, create_issue_lookup_query, %{projectSlug: "project", stateName: "Todo"}}
+    assert create_issue_lookup_query =~ "project"
+
+    assert_receive {:graphql_called, create_issue_query, %{input: input}}
+    assert create_issue_query =~ "issueCreate"
+    assert input.teamId == "team-1"
+    assert input.projectId == "project-1"
+    assert input.stateId == "state-1"
+    assert created_issue.id == "issue-created"
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

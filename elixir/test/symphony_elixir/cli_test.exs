@@ -136,4 +136,52 @@ defmodule SymphonyElixir.CLITest do
 
     assert :ok = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
   end
+
+  test "starts orchestrator chat when --orchestrator is provided" do
+    parent = self()
+    workflow_path = Path.expand("WORKFLOW.md")
+    business_plan_path = Path.expand("business-plan.md")
+
+    deps = %{
+      file_regular?: fn
+        ^workflow_path -> true
+        ^business_plan_path -> true
+      end,
+      set_workflow_file_path: fn path ->
+        send(parent, {:workflow_set, path})
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      set_orchestrator_business_plan_path: fn path ->
+        send(parent, {:business_plan_set, path})
+        :ok
+      end,
+      start_orchestrator_agent: fn path ->
+        send(parent, {:orchestrator_started, path})
+        {:ok, self()}
+      end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert :ok = CLI.evaluate([@ack_flag, "--orchestrator", "business-plan.md", "WORKFLOW.md"], deps)
+    assert_received {:workflow_set, ^workflow_path}
+    assert_received {:business_plan_set, ^business_plan_path}
+    assert_received {:orchestrator_started, ^business_plan_path}
+  end
+
+  test "returns not found when orchestrator business plan does not exist" do
+    deps = %{
+      file_regular?: fn path -> Path.basename(path) == "WORKFLOW.md" end,
+      set_workflow_file_path: fn _path -> :ok end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert {:error, message} =
+             CLI.evaluate([@ack_flag, "--orchestrator", "missing-plan.md", "WORKFLOW.md"], deps)
+
+    assert message =~ "Business plan file not found:"
+  end
 end

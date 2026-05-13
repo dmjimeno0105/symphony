@@ -18,11 +18,13 @@ defmodule SymphonyElixir.PromptBuilder do
     |> Solid.render!(
       %{
         "attempt" => Keyword.get(opts, :attempt),
+        "orchestrator_guidance" => Keyword.get(opts, :orchestrator_guidance),
         "issue" => issue |> Map.from_struct() |> to_solid_map()
       },
       @render_opts
     )
     |> IO.iodata_to_binary()
+    |> append_orchestrator_guidance(Keyword.get(opts, :orchestrator_guidance))
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
@@ -61,4 +63,22 @@ defmodule SymphonyElixir.PromptBuilder do
       prompt
     end
   end
+
+  defp append_orchestrator_guidance(prompt, guidance) when is_binary(guidance) do
+    case String.trim(guidance) do
+      "" ->
+        prompt
+
+      trimmed ->
+        prompt <>
+          """
+
+          Orchestrator amended guidance:
+
+          #{trimmed}
+          """
+    end
+  end
+
+  defp append_orchestrator_guidance(prompt, _guidance), do: prompt
 end

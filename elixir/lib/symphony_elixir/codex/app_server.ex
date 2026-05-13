@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           auto_approve_requests: boolean(),
           thread_sandbox: String.t(),
           turn_sandbox_policy: map(),
+          dynamic_tool_specs: [map()],
           thread_id: String.t(),
           workspace: Path.t(),
           worker_host: String.t() | nil
@@ -45,7 +46,8 @@ defmodule SymphonyElixir.Codex.AppServer do
       metadata = port_metadata(port, worker_host)
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
-           {:ok, thread_id} <- do_start_session(port, expanded_workspace, session_policies) do
+           dynamic_tool_specs = Keyword.get(opts, :dynamic_tool_specs, DynamicTool.tool_specs()),
+           {:ok, thread_id} <- do_start_session(port, expanded_workspace, session_policies, dynamic_tool_specs) do
         {:ok,
          %{
            port: port,
@@ -54,6 +56,7 @@ defmodule SymphonyElixir.Codex.AppServer do
            auto_approve_requests: session_policies.approval_policy == "never",
            thread_sandbox: session_policies.thread_sandbox,
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
+           dynamic_tool_specs: dynamic_tool_specs,
            thread_id: thread_id,
            workspace: expanded_workspace,
            worker_host: worker_host
@@ -270,14 +273,14 @@ defmodule SymphonyElixir.Codex.AppServer do
     Config.codex_runtime_settings(workspace, remote: true)
   end
 
-  defp do_start_session(port, workspace, session_policies) do
+  defp do_start_session(port, workspace, session_policies, dynamic_tool_specs) do
     case send_initialize(port) do
-      :ok -> start_thread(port, workspace, session_policies)
+      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_specs)
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp start_thread(port, workspace, %{approval_policy: approval_policy, thread_sandbox: thread_sandbox}) do
+  defp start_thread(port, workspace, %{approval_policy: approval_policy, thread_sandbox: thread_sandbox}, dynamic_tool_specs) do
     send_message(port, %{
       "method" => "thread/start",
       "id" => @thread_start_id,
@@ -285,7 +288,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         "approvalPolicy" => approval_policy,
         "sandbox" => thread_sandbox,
         "cwd" => workspace,
-        "dynamicTools" => DynamicTool.tool_specs()
+        "dynamicTools" => dynamic_tool_specs
       }
     })
 

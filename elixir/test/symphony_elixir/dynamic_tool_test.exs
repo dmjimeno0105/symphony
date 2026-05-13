@@ -22,6 +22,43 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert description =~ "Linear"
   end
 
+  test "orchestrator mode advertises Symphony control tools" do
+    names = DynamicTool.tool_specs(mode: :orchestrator) |> Enum.map(& &1["name"])
+
+    assert "linear_graphql" in names
+    assert "symphony_status" in names
+    assert "symphony_refresh" in names
+    assert "symphony_create_issue" in names
+    assert "symphony_interrupt_worker" in names
+    assert "symphony_read_business_plan" in names
+  end
+
+  test "symphony_read_business_plan returns configured business plan content" do
+    path = Path.join(System.tmp_dir!(), "symphony-business-plan-#{System.unique_integer([:positive])}.md")
+    File.write!(path, "build the thing")
+
+    on_exit(fn -> File.rm(path) end)
+
+    response = DynamicTool.execute("symphony_read_business_plan", %{}, mode: :orchestrator, business_plan_path: path)
+
+    assert response["success"] == true
+    assert Jason.decode!(response["output"]) == %{"content" => "build the thing", "path" => path}
+  end
+
+  test "symphony_create_issue creates memory tracker issue in default active state" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+
+    response =
+      DynamicTool.execute(
+        "symphony_create_issue",
+        %{"title" => "Draft implementation", "description" => "Do the approved work"},
+        mode: :orchestrator
+      )
+
+    assert response["success"] == true
+    %{"issue" => %{"state" => "Todo", "title" => "Draft implementation"}} = Jason.decode!(response["output"])
+  end
+
   test "unsupported tools return a failure payload with the supported tool list" do
     response = DynamicTool.execute("not_a_real_tool", %{})
 
