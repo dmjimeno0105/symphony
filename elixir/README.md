@@ -55,6 +55,8 @@ mise exec -- elixir --version
 
 ## Run
 
+Build the reference implementation from the Symphony checkout:
+
 ```bash
 git clone https://github.com/openai/symphony
 cd symphony/elixir
@@ -62,7 +64,6 @@ mise trust
 mise install
 mise exec -- mix setup
 mise exec -- mix escript.build
-mise exec -- escript ./bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails ./WORKFLOW.md
 ```
 
 `mix escript.build` creates `./bin/symphony`. `mise exec --` runs commands with the Erlang and
@@ -71,31 +72,44 @@ escript, which is especially useful on Windows. The long guardrails acknowledgem
 only once per OS user; after a successful acknowledged run, Symphony writes a marker under your home
 directory and future runs can omit the flag.
 
-To start Symphony with the interactive top-level orchestrator chat, pass a business plan file:
+Then run the built escript from your custom repository. By convention, `WORKFLOW.md` and
+`business-plan.md` belong to that custom repository, not to the Symphony implementation checkout:
 
 ```bash
-mise exec -- escript ./bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails --orchestrator ../business-plan.md ./WORKFLOW.md
+cd /path/to/custom-repo
+mise exec -- escript /path/to/symphony/elixir/bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails ./WORKFLOW.md
+```
+
+To start Symphony with the interactive top-level orchestrator chat, pass the custom repo's
+business plan file:
+
+```bash
+cd /path/to/custom-repo
+mise exec -- escript /path/to/symphony/elixir/bin/symphony --i-understand-that-this-will-be-running-without-the-usual-guardrails --orchestrator ./business-plan.md ./WORKFLOW.md
 ```
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass your custom repository's workflow file path to `./bin/symphony` when starting the service:
 
 ```bash
 ./bin/symphony /path/to/custom/WORKFLOW.md
 ```
 
-If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+If no path is passed, Symphony defaults to `./WORKFLOW.md` in the current working directory. For
+normal use, run Symphony from your custom repository so that default resolves to that repo's
+workflow file.
 
 Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 - `--orchestrator <business-plan-path>` starts an interactive Codex orchestrator chat after
-  Symphony boots.
+  Symphony boots. The business plan is read-only input and should describe the same custom
+  repository configured by `WORKFLOW.md`.
 
-The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
-Codex session prompt.
+The custom repo's `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body
+used as the Codex session prompt.
 
 Minimal example:
 
